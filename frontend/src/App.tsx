@@ -75,7 +75,6 @@ function Dashboard() {
           <RescanButton/>
           <ThemeToggle dark={dark} onToggle={() => setDark(d => !d)}/>
           <span className="text-xs text-slate-500 mono hidden sm:block">{lastUpdate.toLocaleTimeString('ru')}</span>
-          <RescanButton />
           <button onClick={loadAll} disabled={refreshing} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs hover:bg-slate-700 transition-colors disabled:opacity-50">
             <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''}/> Обновить
           </button>
@@ -114,4 +113,3 @@ function Dashboard() {
 export default function App() {
   return <ToastProvider><Dashboard/></ToastProvider>
 }
-// RescanButton уже определён ниже, просто добавь в Dashboard вручную

@@ -85,12 +85,12 @@ def ingest_file(filepath: str, force: bool = False):
     finally: db.close()
 
 def ingest_all(logs_path: str):
-    files = sorted(glob.glob(os.path.join(logs_path, "*.log")))
+    files = sorted(glob.glob(os.path.join(logs_path, "*.log *.txt")))
     for f in files: ingest_file(f)
 
 def rescan_new(logs_path: str) -> list:
     """Сканирует папку и загружает только новые файлы."""
-    files = sorted(glob.glob(os.path.join(logs_path, "*.log")))
+    files = sorted(glob.glob(os.path.join(logs_path, "*.log *.txt")))
     new_files = [f for f in files if not is_ingested(f)]
     results = []
     for f in new_files:
@@ -140,7 +140,7 @@ class LogFileHandler(FileSystemEventHandler):
                 _tail_handlers[event.src_path].check()
 
 def start_watcher(logs_path: str):
-    for f in glob.glob(os.path.join(logs_path, "*.log")):
+    for f in glob.glob(os.path.join(logs_path, "*.log *.txt")):
         _tail_handlers[f] = TailHandler(f)
     observer = Observer()
     observer.schedule(LogFileHandler(), logs_path, recursive=False)
