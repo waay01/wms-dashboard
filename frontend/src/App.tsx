@@ -11,11 +11,12 @@ import { DateRangePicker } from './components/DateRangePicker'
 import { ThemeToggle } from './components/ThemeToggle'
 import { ToastProvider, useToast } from './components/Toast'
 import { RescanButton } from './components/RescanButton'
+import { SessionsView } from './components/SessionsView'
 import { CompareView } from './components/CompareView'
 import { useUrlFilters } from './api/useUrlFilters'
 import { fetchStats, fetchActivityChart, fetchDatabasesChart, fetchTopErrors, fetchWatchdog, fetchDateRange } from './api/client'
 
-type Tab = 'dashboard' | 'compare'
+type Tab = 'dashboard' | 'compare' | 'sessions'
 
 function Dashboard() {
   const { filters, setFilters } = useUrlFilters()
@@ -118,7 +119,7 @@ function Dashboard() {
 
       {/* Вкладки */}
       <div className="flex gap-1 border-b border-white/5">
-        {([['dashboard','Дашборд'],['compare','Сравнение']] as [Tab,string][]).map(([t,label]) => (
+        {([['dashboard','Дашборд'],['compare','Сравнение'],['sessions','Сессии ТСД']] as [Tab,string][]).map(([t,label]) => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm transition-colors border-b-2 -mb-px ${
               tab === t
@@ -131,6 +132,8 @@ function Dashboard() {
       </div>
 
       {tab === 'compare' && <CompareView/>}
+
+      {tab === 'sessions' && <SessionsView dateFrom={filters.dateFrom} dateTo={filters.dateTo}/>}
 
       {tab === 'dashboard' && (
         <>

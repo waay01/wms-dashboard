@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text as sa_text
 from database import init_db, get_db, LogEntry
 from parser import ingest_all, start_watcher, set_ws_broadcast
 import uvicorn
@@ -105,7 +105,7 @@ def integration_summary(date_from=None, date_to=None, db: Session=Depends(get_db
     where = "WHERE database = 'leadwms_transit' AND level_eng = 'ERROR'"
     if df: where += f" AND timestamp >= '{df.isoformat()}'"
     if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(text(f"SELECT SUBSTRING(msg,1,100) as m, COUNT(*) as c, MIN(timestamp) as f, MAX(timestamp) as l FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT 20")).fetchall()
+    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,100) as m, COUNT(*) as c, MIN(timestamp) as f, MAX(timestamp) as l FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT 20")).fetchall()
     return [{"msg": r[0], "count": r[1], "first_seen": r[2].isoformat() if r[2] else None, "last_seen": r[3].isoformat() if r[3] else None} for r in rows]
 
 @app.get("/api/operators")
@@ -114,14 +114,14 @@ def get_operators(date_from=None, date_to=None, db: Session=Depends(get_db)):
     where = "WHERE is_tsd = 1 AND operator_name IS NOT NULL AND operator_name != ''"
     if df: where += f" AND timestamp >= '{df.isoformat()}'"
     if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(text(f"SELECT operator_name, COUNT(*) as t, SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as e FROM log_entries {where} GROUP BY operator_name ORDER BY t DESC LIMIT 20")).fetchall()
+    rows = db.execute(sa_text(f"SELECT operator_name, COUNT(*) as t, SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as e FROM log_entries {where} GROUP BY operator_name ORDER BY t DESC LIMIT 20")).fetchall()
     return [{"operator": r[0], "operations": r[1], "errors": r[2]} for r in rows]
 
 @app.get("/api/watchdog")
 def get_watchdog(db: Session=Depends(get_db)):
     one_hour_ago = datetime.utcnow() - timedelta(hours=1)
     one_day_ago = datetime.utcnow() - timedelta(days=1)
-    rows = db.execute(text("""
+    rows = db.execute(sa_text("""
         WITH recent AS (SELECT SUBSTRING(msg,1,120) as m, COUNT(*) as c FROM log_entries WHERE level_eng='ERROR' AND timestamp>=:h GROUP BY m),
         historical AS (SELECT SUBSTRING(msg,1,120) as m FROM log_entries WHERE level_eng='ERROR' AND timestamp<:h AND timestamp>=:d GROUP BY m)
         SELECT r.m, r.c FROM recent r LEFT JOIN historical h ON r.m=h.m WHERE h.m IS NULL ORDER BY r.c DESC LIMIT 10
@@ -134,7 +134,7 @@ def chart_activity(interval: str="hour", date_from=None, date_to=None, db: Sessi
     where = ""
     if df: where += f" AND timestamp >= '{df.isoformat()}'"
     if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(text(f"SELECT date_trunc('{interval}', timestamp) as t, level_eng, COUNT(*) as c FROM log_entries WHERE 1=1 {where} GROUP BY t, level_eng ORDER BY t")).fetchall()
+    rows = db.execute(sa_text(f"SELECT date_trunc('{interval}', timestamp) as t, level_eng, COUNT(*) as c FROM log_entries WHERE 1=1 {where} GROUP BY t, level_eng ORDER BY t")).fetchall()
     result = {}
     for r in rows:
         t = r[0].isoformat() if r[0] else None
@@ -153,7 +153,7 @@ def chart_top_errors(limit: int=10, date_from=None, date_to=None, db: Session=De
     where = "WHERE level_eng = 'ERROR'"
     if df: where += f" AND timestamp >= '{df.isoformat()}'"
     if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(text(f"SELECT SUBSTRING(msg,1,80) as m, COUNT(*) as c FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT {limit}")).fetchall()
+    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,80) as m, COUNT(*) as c FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT {limit}")).fetchall()
     return [{"msg": r[0], "count": r[1]} for r in rows]
 
 @app.get("/api/charts/levels")
@@ -167,7 +167,7 @@ def filter_databases(db: Session=Depends(get_db)):
 
 @app.get("/api/filters/date-range")
 def filter_date_range(db: Session=Depends(get_db)):
-    row = db.execute(text("SELECT MIN(timestamp), MAX(timestamp) FROM log_entries")).fetchone()
+    row = db.execute(sa_text("SELECT MIN(timestamp), MAX(timestamp) FROM log_entries")).fetchone()
     return {"min": row[0].isoformat() if row[0] else None, "max": row[1].isoformat() if row[1] else None}
 
 @app.websocket("/ws/live")
@@ -180,27 +180,6 @@ async def websocket_live(ws: WebSocket):
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
 
-
-@app.post("/api/admin/rescan")
-def rescan_logs():
-    """Принудительное сканирование папки логов — подхватывает новые файлы."""
-    import glob
-    from parser import ingest_file
-    files = sorted(glob.glob(os.path.join(LOGS_PATH, "*.log")))
-    
-    db = next(get_db())
-    existing = set(
-        r[0] for r in db.execute(
-            text("SELECT DISTINCT source FROM log_entries_files WHERE 1=1")
-        ).fetchall()
-    ) if False else set()  # упрощённо — пересканируем все
-    
-    def _run():
-        for f in files:
-            ingest_file(f)
-    
-    threading.Thread(target=_run, daemon=True).start()
-    return {"status": "started", "files": [os.path.basename(f) for f in files]}
 
 
 @app.post("/api/admin/rescan")
@@ -243,7 +222,7 @@ def compare_periods(
         if df: where += f" AND timestamp >= '{df.isoformat()}'"
         if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
 
-        row = db.execute(text(f"""
+        row = db.execute(sa_text(f"""
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as errors,
@@ -255,13 +234,13 @@ def compare_periods(
             FROM log_entries {where}
         """)).fetchone()
 
-        top_errors = db.execute(text(f"""
+        top_errors = db.execute(sa_text(f"""
             SELECT SUBSTRING(msg,1,60) as m, COUNT(*) as c
             FROM log_entries {where} AND level_eng='ERROR'
             GROUP BY m ORDER BY c DESC LIMIT 5
         """)).fetchall()
 
-        by_level = db.execute(text(f"""
+        by_level = db.execute(sa_text(f"""
             SELECT level_eng, COUNT(*) as c
             FROM log_entries {where}
             GROUP BY level_eng ORDER BY c DESC
@@ -283,3 +262,96 @@ def compare_periods(
         "period_a": {"from": date_from_a, "to": date_to_a, **get_metrics(date_from_a, date_to_a)},
         "period_b": {"from": date_from_b, "to": date_to_b, **get_metrics(date_from_b, date_to_b)},
     }
+
+
+@app.get("/api/sessions/operators")
+def session_operators(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Список операторов у которых есть TSD сессии."""
+    df = parse_dt(date_from)
+    dt = parse_dt(date_to, end_of_day=True)
+    where = "WHERE is_tsd = 1 AND terminal_uuid IS NOT NULL"
+    if df: where += f" AND timestamp >= '{df.isoformat()}'"
+    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+    rows = db.execute(sa_text(f"""
+        SELECT 
+            COALESCE(operator_name, '—') as operator,
+            terminal_uuid,
+            COUNT(*) as events,
+            SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as errors,
+            MIN(timestamp) as first_seen,
+            MAX(timestamp) as last_seen
+        FROM log_entries {where}
+        GROUP BY operator_name, terminal_uuid
+        ORDER BY last_seen DESC
+        LIMIT 100
+    """)).fetchall()
+    return [
+        {
+            "operator": r[0],
+            "terminal_uuid": r[1],
+            "events": r[2],
+            "errors": r[3],
+            "first_seen": r[4].isoformat() if r[4] else None,
+            "last_seen": r[5].isoformat() if r[5] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/sessions/timeline")
+def session_timeline(
+    terminal_uuid: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Хронология экранов ТСД и ошибок для конкретного терминала."""
+    df = parse_dt(date_from)
+    dt = parse_dt(date_to, end_of_day=True)
+    where = f"WHERE terminal_uuid = '{terminal_uuid}'"
+    if df: where += f" AND timestamp >= '{df.isoformat()}'"
+    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+
+    rows = db.execute(sa_text(f"""
+        SELECT 
+            timestamp, level_eng, msg, operator_name, database
+        FROM log_entries
+        {where}
+        ORDER BY timestamp ASC
+        LIMIT 500
+    """)).fetchall()
+
+    SEP = chr(11)
+    TAB = chr(9)
+    TSD_TEXT_PREFIX = 'TEXT' + TAB
+
+    events = []
+    for row in rows:
+        ts, level, msg, operator, database = row
+        
+        # Извлекаем тексты экрана ТСД
+        screen_texts = []
+        if msg and SEP in msg:
+            parts = msg.split(SEP)
+            for part in parts:
+                p = part.strip()
+                if p.startswith(TSD_TEXT_PREFIX):
+                    tsd_text = p[len(TSD_TEXT_PREFIX):].strip()
+                    if tsd_text and not tsd_text.upper() == tsd_text:
+                        screen_texts.append(tsd_text)
+
+        events.append({
+            "timestamp": ts.isoformat(),
+            "level_eng": level,
+            "operator": operator,
+            "database": database,
+            "screen_texts": screen_texts[:5],
+            "msg_short": (msg or "")[:150],
+            "is_error": level == "ERROR",
+        })
+
+    return events
