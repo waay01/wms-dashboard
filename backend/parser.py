@@ -1,87 +1,49 @@
-import re
-import os
-import time
-import glob
-import threading
+import re, os, time, glob, threading, asyncio
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from database import SessionLocal, LogEntry
 
-LEVEL_MAP = {
-    "ОШИБКА": "ERROR",
-    "СООБЩЕНИЕ": "INFO",
-    "ПОДРОБНОСТИ": "DEBUG",
-    "КОНТЕКСТ": "DEBUG",
-    "ОПЕРАТОР": "DEBUG",
-    "ЗАМЕЧАНИЕ": "WARN",
-    "ЗАПРОС": "DEBUG",
-    "ОТЛАДКА": "DEBUG",
-}
-
-LOG_PATTERN = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) MSK \[(\d+)\] (\S+)@(\S+) ([^:]+):\s+(.*)",
-    re.DOTALL,
-)
-
+LEVEL_MAP = {"ОШИБКА":"ERROR","СООБЩЕНИЕ":"INFO","ПОДРОБНОСТИ":"DEBUG","КОНТЕКСТ":"DEBUG","ОПЕРАТОР":"DEBUG","ЗАМЕЧАНИЕ":"WARN","ЗАПРОС":"DEBUG","ОТЛАДКА":"DEBUG"}
+LOG_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) MSK \[(\d+)\] (\S+)@(\S+) ([^:]+):\s+(.*)", re.DOTALL)
 OPERATOR_PATTERN = re.compile(r"TEXT\t([^\tM][^\t]*?)(?=METHOD|$)")
-TSD_MARKERS = ["XCOOR", "YCOOR", "PRINTMODE", "METHOD\tPRINT"]
+TSD_MARKERS = ["XCOOR","YCOOR","PRINTMODE","METHOD\tPRINT"]
 
-broadcast_callbacks = []
+_broadcast_cb = None
+_loop = None
 
+def set_ws_broadcast(cb):
+    global _broadcast_cb, _loop
+    _broadcast_cb = cb
+    try: _loop = asyncio.get_event_loop()
+    except: pass
 
-def add_broadcast_callback(cb):
-    broadcast_callbacks.append(cb)
-
+def _fire(entry: LogEntry):
+    if _broadcast_cb and _loop and entry.level_eng in ("ERROR","WARN"):
+        data = {"type":"live","id":entry.id,"timestamp":entry.timestamp.isoformat(),"level_eng":entry.level_eng,"database":entry.database,"msg":(entry.msg or "")[:200],"operator_name":entry.operator_name}
+        asyncio.run_coroutine_threadsafe(_broadcast_cb(data), _loop)
 
 def parse_line(raw: str):
     raw = raw.strip()
-    if not raw:
-        return None
+    if not raw: return None
     m = LOG_PATTERN.match(raw)
-    if not m:
-        return None
-
+    if not m: return None
     ts_str, pid, db_user, database, level, msg = m.groups()
     level = level.strip()
     level_eng = LEVEL_MAP.get(level, "UNKNOWN")
-
     is_tsd = any(marker in msg for marker in TSD_MARKERS)
     operator_name = None
     if is_tsd:
-        names = OPERATOR_PATTERN.findall(msg)
-        # Фильтруем мусор — берём первое человекочитаемое имя
-        for name in names:
+        for name in OPERATOR_PATTERN.findall(msg):
             name = name.strip()
-            if len(name) > 2 and not any(c in name for c in ["$", "=", "'"]):
-                operator_name = name
-                break
-
-    try:
-        timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
-    except ValueError:
-        return None
-
-    return LogEntry(
-        timestamp=timestamp,
-        pid=int(pid),
-        db_user=db_user,
-        database=database,
-        level=level,
-        level_eng=level_eng,
-        msg=msg[:2000],
-        is_tsd=1 if is_tsd else 0,
-        operator_name=operator_name,
-        raw=raw[:3000],
-    )
-
+            if len(name) > 2 and not any(c in name for c in ["$","=","'"]): operator_name = name; break
+    try: timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
+    except: return None
+    return LogEntry(timestamp=timestamp, pid=int(pid), db_user=db_user, database=database, level=level, level_eng=level_eng, msg=msg[:2000], is_tsd=1 if is_tsd else 0, operator_name=operator_name, raw=raw[:3000])
 
 def ingest_file(filepath: str):
-    """Читает файл целиком и заливает в БД батчами."""
     db = SessionLocal()
-    batch = []
-    multiline_buf = []
-
+    batch = []; multiline_buf = []
     print(f"[parser] Ingesting {filepath}")
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
@@ -89,53 +51,73 @@ def ingest_file(filepath: str):
                 if re.match(r"^\d{4}-\d{2}-\d{2}", line):
                     if multiline_buf:
                         entry = parse_line("\n".join(multiline_buf))
-                        if entry:
-                            batch.append(entry)
+                        if entry: batch.append(entry)
                     multiline_buf = [line.rstrip()]
                 else:
-                    if multiline_buf:
-                        multiline_buf.append(line.rstrip())
-
+                    if multiline_buf: multiline_buf.append(line.rstrip())
             if multiline_buf:
                 entry = parse_line("\n".join(multiline_buf))
-                if entry:
-                    batch.append(entry)
-
+                if entry: batch.append(entry)
         if batch:
-            db.bulk_save_objects(batch)
-            db.commit()
+            db.bulk_save_objects(batch); db.commit()
             print(f"[parser] Saved {len(batch)} entries from {os.path.basename(filepath)}")
-    except Exception as e:
-        print(f"[parser] Error ingesting {filepath}: {e}")
-        db.rollback()
-    finally:
-        db.close()
-
+    except Exception as e: print(f"[parser] Error: {e}"); db.rollback()
+    finally: db.close()
 
 def ingest_all(logs_path: str):
-    """Заливает все существующие лог-файлы."""
     files = sorted(glob.glob(os.path.join(logs_path, "*.log")))
-    for f in files:
-        ingest_file(f)
+    for f in files: ingest_file(f)
 
+class TailHandler:
+    """Следит за хвостом файла и отправляет новые строки в БД + WS."""
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.pos = os.path.getsize(filepath)
+        self.buf = []
+
+    def check(self):
+        try:
+            size = os.path.getsize(self.filepath)
+            if size <= self.pos: return
+            with open(self.filepath, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(self.pos)
+                new_data = f.read()
+                self.pos = f.tell()
+            for line in new_data.splitlines(keepends=True):
+                if re.match(r"^\d{4}-\d{2}-\d{2}", line):
+                    if self.buf:
+                        entry = parse_line("\n".join(self.buf))
+                        if entry: self._save(entry)
+                    self.buf = [line.rstrip()]
+                else:
+                    if self.buf: self.buf.append(line.rstrip())
+        except Exception as e: print(f"[tail] Error: {e}")
+
+    def _save(self, entry):
+        db = SessionLocal()
+        try: db.add(entry); db.commit(); db.refresh(entry); _fire(entry)
+        except: db.rollback()
+        finally: db.close()
+
+_tail_handlers: dict[str, TailHandler] = {}
 
 class LogFileHandler(FileSystemEventHandler):
-    """Следит за новыми файлами и изменениями."""
-
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(".log"):
-            time.sleep(1)
-            ingest_file(event.src_path)
+            time.sleep(1); ingest_file(event.src_path)
+            _tail_handlers[event.src_path] = TailHandler(event.src_path)
 
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith(".log"):
-            pass  # tail логика при необходимости
-
+            if event.src_path in _tail_handlers:
+                _tail_handlers[event.src_path].check()
 
 def start_watcher(logs_path: str):
+    # Запускаем tail для уже существующих файлов
+    for f in glob.glob(os.path.join(logs_path, "*.log")):
+        _tail_handlers[f] = TailHandler(f)
     observer = Observer()
-    handler = LogFileHandler()
-    observer.schedule(handler, logs_path, recursive=False)
+    observer.schedule(LogFileHandler(), logs_path, recursive=False)
     observer.start()
-    print(f"[parser] Watching {logs_path} for new log files")
+    print(f"[parser] Watching {logs_path} for changes")
     return observer
