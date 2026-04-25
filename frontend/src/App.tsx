@@ -11,6 +11,7 @@ import { DateRangePicker } from './components/DateRangePicker'
 import { ThemeToggle } from './components/ThemeToggle'
 import { ToastProvider, useToast } from './components/Toast'
 import { useUrlFilters } from './api/useUrlFilters'
+import { RescanButton } from './components/RescanButton'
 import { fetchStats, fetchActivityChart, fetchDatabasesChart, fetchTopErrors, fetchWatchdog, fetchDateRange } from './api/client'
 
 function Dashboard() {
@@ -71,8 +72,10 @@ function Dashboard() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <DateRangePicker dateFrom={filters.dateFrom} dateTo={filters.dateTo} minDate={dateRange.min} maxDate={dateRange.max} onChange={(from,to) => setFilters(f => ({...f, dateFrom:from, dateTo:to}))}/>
+          <RescanButton/>
           <ThemeToggle dark={dark} onToggle={() => setDark(d => !d)}/>
           <span className="text-xs text-slate-500 mono hidden sm:block">{lastUpdate.toLocaleTimeString('ru')}</span>
+          <RescanButton />
           <button onClick={loadAll} disabled={refreshing} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 text-xs hover:bg-slate-700 transition-colors disabled:opacity-50">
             <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''}/> Обновить
           </button>
@@ -111,3 +114,4 @@ function Dashboard() {
 export default function App() {
   return <ToastProvider><Dashboard/></ToastProvider>
 }
+// RescanButton уже определён ниже, просто добавь в Dashboard вручную

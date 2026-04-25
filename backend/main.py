@@ -179,3 +179,51 @@ async def websocket_live(ws: WebSocket):
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+@app.post("/api/admin/rescan")
+def rescan_logs():
+    """Принудительное сканирование папки логов — подхватывает новые файлы."""
+    import glob
+    from parser import ingest_file
+    files = sorted(glob.glob(os.path.join(LOGS_PATH, "*.log")))
+    
+    db = next(get_db())
+    existing = set(
+        r[0] for r in db.execute(
+            text("SELECT DISTINCT source FROM log_entries_files WHERE 1=1")
+        ).fetchall()
+    ) if False else set()  # упрощённо — пересканируем все
+    
+    def _run():
+        for f in files:
+            ingest_file(f)
+    
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "files": [os.path.basename(f) for f in files]}
+
+
+@app.post("/api/admin/rescan")
+def rescan(db: Session = Depends(get_db)):
+    """Сканирует папку логов и загружает только новые файлы."""
+    from parser import rescan_new
+    results = []
+    def _run():
+        nonlocal results
+        results = rescan_new(LOGS_PATH)
+    t = threading.Thread(target=_run)
+    t.start(); t.join(timeout=2)
+    return {"status": "ok", "new_files": results}
+
+@app.get("/api/admin/files")
+def list_files(db: Session = Depends(get_db)):
+    """Список всех загруженных файлов."""
+    from database import IngestedFile
+    rows = db.query(IngestedFile).order_by(IngestedFile.filename).all()
+    all_files = __import__('glob').glob(os.path.join(LOGS_PATH, "*.log"))
+    ingested = {r.filename: r.entry_count for r in rows}
+    result = []
+    for f in sorted(all_files):
+        name = os.path.basename(f)
+        result.append({"file": name, "ingested": name in ingested, "entries": ingested.get(name, 0)})
+    return result

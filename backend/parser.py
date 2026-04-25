@@ -2,7 +2,7 @@ import re, os, time, glob, threading, asyncio
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from database import SessionLocal, LogEntry
+from database import SessionLocal, LogEntry, IngestedFile
 
 LEVEL_MAP = {"ОШИБКА":"ERROR","СООБЩЕНИЕ":"INFO","ПОДРОБНОСТИ":"DEBUG","КОНТЕКСТ":"DEBUG","ОПЕРАТОР":"DEBUG","ЗАМЕЧАНИЕ":"WARN","ЗАПРОС":"DEBUG","ОТЛАДКА":"DEBUG"}
 LOG_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) MSK \[(\d+)\] (\S+)@(\S+) ([^:]+):\s+(.*)", re.DOTALL)
@@ -41,7 +41,25 @@ def parse_line(raw: str):
     except: return None
     return LogEntry(timestamp=timestamp, pid=int(pid), db_user=db_user, database=database, level=level, level_eng=level_eng, msg=msg[:2000], is_tsd=1 if is_tsd else 0, operator_name=operator_name, raw=raw[:3000])
 
-def ingest_file(filepath: str):
+def is_ingested(filepath: str) -> bool:
+    db = SessionLocal()
+    try:
+        return db.query(IngestedFile).filter(IngestedFile.filename == os.path.basename(filepath)).first() is not None
+    finally: db.close()
+
+def mark_ingested(filepath: str, count: int):
+    db = SessionLocal()
+    try:
+        existing = db.query(IngestedFile).filter(IngestedFile.filename == os.path.basename(filepath)).first()
+        if existing: existing.entry_count = count; existing.ingested_at = datetime.utcnow()
+        else: db.add(IngestedFile(filename=os.path.basename(filepath), entry_count=count))
+        db.commit()
+    finally: db.close()
+
+def ingest_file(filepath: str, force: bool = False):
+    if not force and is_ingested(filepath):
+        print(f"[parser] Skip (already ingested): {os.path.basename(filepath)}")
+        return 0
     db = SessionLocal()
     batch = []; multiline_buf = []
     print(f"[parser] Ingesting {filepath}")
@@ -60,16 +78,27 @@ def ingest_file(filepath: str):
                 if entry: batch.append(entry)
         if batch:
             db.bulk_save_objects(batch); db.commit()
+            mark_ingested(filepath, len(batch))
             print(f"[parser] Saved {len(batch)} entries from {os.path.basename(filepath)}")
-    except Exception as e: print(f"[parser] Error: {e}"); db.rollback()
+        return len(batch)
+    except Exception as e: print(f"[parser] Error: {e}"); db.rollback(); return 0
     finally: db.close()
 
 def ingest_all(logs_path: str):
     files = sorted(glob.glob(os.path.join(logs_path, "*.log")))
     for f in files: ingest_file(f)
 
+def rescan_new(logs_path: str) -> list:
+    """Сканирует папку и загружает только новые файлы."""
+    files = sorted(glob.glob(os.path.join(logs_path, "*.log")))
+    new_files = [f for f in files if not is_ingested(f)]
+    results = []
+    for f in new_files:
+        count = ingest_file(f)
+        results.append({"file": os.path.basename(f), "entries": count})
+    return results
+
 class TailHandler:
-    """Следит за хвостом файла и отправляет новые строки в БД + WS."""
     def __init__(self, filepath):
         self.filepath = filepath
         self.pos = os.path.getsize(filepath)
@@ -80,9 +109,7 @@ class TailHandler:
             size = os.path.getsize(self.filepath)
             if size <= self.pos: return
             with open(self.filepath, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(self.pos)
-                new_data = f.read()
-                self.pos = f.tell()
+                f.seek(self.pos); new_data = f.read(); self.pos = f.tell()
             for line in new_data.splitlines(keepends=True):
                 if re.match(r"^\d{4}-\d{2}-\d{2}", line):
                     if self.buf:
@@ -113,11 +140,10 @@ class LogFileHandler(FileSystemEventHandler):
                 _tail_handlers[event.src_path].check()
 
 def start_watcher(logs_path: str):
-    # Запускаем tail для уже существующих файлов
     for f in glob.glob(os.path.join(logs_path, "*.log")):
         _tail_handlers[f] = TailHandler(f)
     observer = Observer()
     observer.schedule(LogFileHandler(), logs_path, recursive=False)
     observer.start()
-    print(f"[parser] Watching {logs_path} for changes")
+    print(f"[parser] Watching {logs_path}")
     return observer
