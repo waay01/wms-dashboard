@@ -1,13 +1,53 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Syne', sans-serif; min-height: 100vh; transition: background 0.2s, color 0.2s; }
-body.dark { background: #080c12; color: #e2e8f0; }
-body.light { background: #f1f5f9; color: #1e293b; }
+
+body {
+  font-family: 'Syne', sans-serif;
+  min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
+  background: #080c12;
+  color: #e2e8f0;
+}
+
+body.dark {
+  background: #080c12;
+  color: #e2e8f0;
+}
+
+body.light {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+/* Светлая тема — переопределяем фоны */
+body.light .rounded-xl {
+  background: white !important;
+}
+
+body.light select,
+body.light input {
+  background: #f8fafc !important;
+  color: #1e293b !important;
+  border-color: #e2e8f0 !important;
+}
+
+body.light table td,
+body.light table th {
+  color: #334155 !important;
+}
+
 .mono { font-family: 'JetBrains Mono', monospace; }
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
-@keyframes slide-in-from-right-4 { from { transform: translateX(1rem); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+body.light ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+
+@keyframes slide-in-from-right-4 {
+  from { transform: translateX(1rem); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
 .animate-in { animation: slide-in-from-right-4 0.2s ease-out; }

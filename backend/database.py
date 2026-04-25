@@ -21,12 +21,15 @@ class LogEntry(Base):
     msg = Column(Text)
     is_tsd = Column(Integer, default=0)
     operator_name = Column(String(100))
+    terminal_uuid = Column(String(50))
     raw = Column(Text)
     __table_args__ = (
         Index("ix_timestamp", "timestamp"),
         Index("ix_level_eng", "level_eng"),
         Index("ix_database", "database"),
         Index("ix_is_tsd", "is_tsd"),
+        Index("ix_operator_name", "operator_name"),
+        Index("ix_terminal_uuid", "terminal_uuid"),
     )
 
 class IngestedFile(Base):
@@ -38,6 +41,17 @@ class IngestedFile(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Добавляем столбец если его ещё нет
+    try:
+        with engine.connect() as conn:
+            conn.execute(__import__('sqlalchemy').text(
+                "ALTER TABLE log_entries ADD COLUMN IF NOT EXISTS terminal_uuid VARCHAR(50)"
+            ))
+            conn.execute(__import__('sqlalchemy').text(
+                "CREATE INDEX IF NOT EXISTS ix_terminal_uuid ON log_entries (terminal_uuid)"
+            ))
+            conn.commit()
+    except: pass
 
 def get_db():
     db = SessionLocal()

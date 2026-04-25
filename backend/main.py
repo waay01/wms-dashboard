@@ -73,7 +73,7 @@ def get_logs(level=None, database=None, search=None, is_tsd: Optional[bool]=None
     q = apply_time_filter(q, date_from, date_to)
     total = q.count()
     items = q.order_by(LogEntry.timestamp.desc()).offset(offset).limit(limit).all()
-    return {"total": total, "items": [{"id": e.id, "timestamp": e.timestamp.isoformat(), "pid": e.pid, "database": e.database, "level": e.level, "level_eng": e.level_eng, "msg": e.msg, "is_tsd": bool(e.is_tsd), "operator_name": e.operator_name} for e in items]}
+    return {"total": total, "items": [{"id": e.id, "timestamp": e.timestamp.isoformat(), "pid": e.pid, "database": e.database, "level": e.level, "level_eng": e.level_eng, "msg": e.msg, "is_tsd": bool(e.is_tsd), "operator_name": e.operator_name, "terminal_uuid": e.terminal_uuid} for e in items]}
 
 @app.get("/api/logs/export")
 def export_logs(level=None, database=None, search=None, date_from=None, date_to=None, db: Session=Depends(get_db)):
@@ -227,3 +227,59 @@ def list_files(db: Session = Depends(get_db)):
         name = os.path.basename(f)
         result.append({"file": name, "ingested": name in ingested, "entries": ingested.get(name, 0)})
     return result
+
+
+@app.get("/api/compare")
+def compare_periods(
+    date_from_a: str, date_to_a: str,
+    date_from_b: str, date_to_b: str,
+    db: Session = Depends(get_db)
+):
+    """Сравнение двух периодов по всем метрикам."""
+    def get_metrics(df_str, dt_str):
+        df = parse_dt(df_str)
+        dt = parse_dt(dt_str, end_of_day=True)
+        where = "WHERE 1=1"
+        if df: where += f" AND timestamp >= '{df.isoformat()}'"
+        if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+
+        row = db.execute(text(f"""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as errors,
+                SUM(CASE WHEN level_eng='WARN' THEN 1 ELSE 0 END) as warnings,
+                SUM(CASE WHEN is_tsd=1 THEN 1 ELSE 0 END) as tsd,
+                SUM(CASE WHEN database='leadwms_transit' AND level_eng='ERROR' THEN 1 ELSE 0 END) as integration,
+                COUNT(DISTINCT database) as databases,
+                COUNT(DISTINCT operator_name) FILTER (WHERE operator_name IS NOT NULL) as operators
+            FROM log_entries {where}
+        """)).fetchone()
+
+        top_errors = db.execute(text(f"""
+            SELECT SUBSTRING(msg,1,60) as m, COUNT(*) as c
+            FROM log_entries {where} AND level_eng='ERROR'
+            GROUP BY m ORDER BY c DESC LIMIT 5
+        """)).fetchall()
+
+        by_level = db.execute(text(f"""
+            SELECT level_eng, COUNT(*) as c
+            FROM log_entries {where}
+            GROUP BY level_eng ORDER BY c DESC
+        """)).fetchall()
+
+        return {
+            "total": row[0] or 0,
+            "errors": row[1] or 0,
+            "warnings": row[2] or 0,
+            "tsd": row[3] or 0,
+            "integration": row[4] or 0,
+            "databases": row[5] or 0,
+            "operators": row[6] or 0,
+            "top_errors": [{"msg": r[0], "count": r[1]} for r in top_errors],
+            "by_level": [{"level": r[0], "count": r[1]} for r in by_level],
+        }
+
+    return {
+        "period_a": {"from": date_from_a, "to": date_to_a, **get_metrics(date_from_a, date_to_a)},
+        "period_b": {"from": date_from_b, "to": date_to_b, **get_metrics(date_from_b, date_to_b)},
+    }
