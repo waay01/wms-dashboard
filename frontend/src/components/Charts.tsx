@@ -16,13 +16,13 @@ export function TopErrors({ data, dateFrom, dateTo }: { data:{msg:string;count:n
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={data} layout="vertical" margin={{top:0,right:10,left:0,bottom:0}} onClick={e=>e?.activePayload&&openDrill(e.activePayload[0]?.payload?.msg)}>
               <XAxis type="number" tick={{fontSize:10,fill:'#475569',fontFamily:'JetBrains Mono'}}/>
-              <YAxis type="category" dataKey="msg" width={160} tick={{fontSize:9,fill:'#94a3b8',fontFamily:'JetBrains Mono'}} tickFormatter={v=>v?.length>22?v.slice(0,22)+'…':v}/>
-              <Tooltip contentStyle={{background:'#0f172a',border:'1px solid #1e3a5f',borderRadius:8,fontFamily:'JetBrains Mono',fontSize:11}}/>
+              <YAxis type="category" dataKey="msg" width={120} tick={{fontSize:9,fill:'#94a3b8',fontFamily:'JetBrains Mono'}} tickFormatter={v=>v?.length>22?v.slice(0,22)+'…':v}/>
+              <Tooltip contentStyle={{background:'#0f172a',border:'1px solid #1e3a5f',borderRadius:8,fontFamily:'JetBrains Mono',fontSize:11 }} itemStyle={{color: '#22c55e'}}/>
               <Bar dataKey="count" radius={[0,4,4,0]} style={{cursor:'pointer'}}>{data.map((_,i)=><Cell key={i} fill={`hsl(${i*15},80%,55%)`}/>)}</Bar>
             </BarChart>
           </ResponsiveContainer>
         )}
-        <p className="text-xs text-slate-600 mono mt-2 text-center">↑ кликни на строку для drill-down</p>
+        <p className="text-xs text-slate-600 mono mt-2 text-center">↑ кликни на строку для подробностей</p>
       </div>
       {drill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -40,7 +40,7 @@ export function TopErrors({ data, dateFrom, dateTo }: { data:{msg:string;count:n
                     <td className="py-1.5 px-3 text-slate-400 whitespace-nowrap">{new Date(item.timestamp).toLocaleString('ru')}</td>
                     <td className="py-1.5 px-3 text-slate-400">{item.database}</td>
                     <td className="py-1.5 px-3 text-emerald-400">{item.operator_name||'—'}</td>
-                    <td className="py-1.5 px-3 text-slate-300 max-w-xs truncate" title={item.msg}>{item.msg}</td>
+                    <td className="py-1.5 px-3 text-slate-300 max-w-xs " title={item.msg}>{item.msg}</td>
                   </tr>
                 ))}</tbody>
               </table>

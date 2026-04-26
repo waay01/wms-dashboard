@@ -73,7 +73,7 @@ export function SessionsView({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
             <label className="text-xs text-slate-500 mono">Оператор</label>
             <input
               className="bg-slate-800/60 border border-white/5 rounded-lg px-3 py-2 text-sm mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50"
-              placeholder="Бубен..."
+              placeholder="Гембель..."
               value={searchOp}
               onChange={e => setSearchOp(e.target.value)}
             />

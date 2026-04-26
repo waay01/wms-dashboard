@@ -1,6 +1,6 @@
 import re, os, time, glob, threading, asyncio
 from datetime import datetime
-from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from database import SessionLocal, LogEntry, IngestedFile
 

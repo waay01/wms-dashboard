@@ -111,7 +111,7 @@ export function ErrorFeed({ dateFrom, dateTo, initLevel = '', initDatabase = '',
         <div className="relative">
           <input
             className="w-full bg-slate-800/60 border border-white/5 rounded-lg px-3 py-2 text-xs mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50"
-            placeholder="Оператор (Бубен...)"
+            placeholder="Оператор (Гембель...)"
             value={draft.operator}
             onChange={e => setDraft(d => ({ ...d, operator: e.target.value }))}
             onKeyDown={handleKeyDown}
