@@ -50,7 +50,7 @@ export function ErrorFeed({ dateFrom, dateTo, initLevel = '', initDatabase = '',
   const [isTsd, setIsTsd] = useState<boolean | undefined>(undefined)
   const [databases, setDatabases] = useState<string[]>([])
 
-  useEffect(() => { fetchFilterDatabases().then(setDatabases) }, [])
+  useEffect(() => { fetchFilterDatabases().then(setDatabases).catch(() => {}) }, [])
   useEffect(() => { setOffset(0) }, [applied, level, database, isTsd, dateFrom, dateTo])
   useEffect(() => { onFilterChange?.({ level, database, search: applied.text }) }, [level, database, applied.text])
 
@@ -65,7 +65,9 @@ export function ErrorFeed({ dateFrom, dateTo, initLevel = '', initDatabase = '',
       is_tsd: isTsd,
       limit: LIMIT, offset,
       date_from: dateFrom, date_to: dateTo,
-    }).then(d => { setLogs(d.items); setTotal(d.total) }).finally(() => setLoading(false))
+    }).then(d => { setLogs(d.items); setTotal(d.total) })
+      .catch(err => console.error('Failed to load logs:', err))
+      .finally(() => setLoading(false))
   }, [applied, level, database, isTsd, offset, dateFrom, dateTo])
 
   useEffect(() => { load() }, [load])
@@ -250,7 +252,7 @@ export function ErrorFeed({ dateFrom, dateTo, initLevel = '', initDatabase = '',
           className="px-3 py-1 text-xs rounded bg-slate-800 text-slate-400 disabled:opacity-30 hover:bg-slate-700">
           ← Назад
         </button>
-        <span className="text-xs text-slate-500 mono">{offset + 1}–{Math.min(offset + LIMIT, total)} из {total.toLocaleString()}</span>
+        <span className="text-xs text-slate-500 mono">{total > 0 ? `${offset + 1}–${Math.min(offset + LIMIT, total)}` : '0'} из {total.toLocaleString()}</span>
         <button disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}
           className="px-3 py-1 text-xs rounded bg-slate-800 text-slate-400 disabled:opacity-30 hover:bg-slate-700">
           Вперёд →

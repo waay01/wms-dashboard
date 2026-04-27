@@ -5,8 +5,12 @@ interface DrillItem { id:number; timestamp:string; database:string; level_eng:st
 export function TopErrors({ data, dateFrom, dateTo }: { data:{msg:string;count:number}[]; dateFrom?:string; dateTo?:string }) {
   const [drill, setDrill] = useState<{msg:string;items:DrillItem[];total:number}|null>(null)
   const openDrill = async (msg: string) => {
-    const d = await fetchLogs({search:msg.slice(0,40),level:'ERROR',date_from:dateFrom,date_to:dateTo,limit:50})
-    setDrill({msg,items:d.items,total:d.total})
+    try {
+      const d = await fetchLogs({search:msg.slice(0,40),level:'ERROR',date_from:dateFrom,date_to:dateTo,limit:50})
+      setDrill({msg,items:d.items,total:d.total})
+    } catch (err) {
+      console.error('Drill-down failed:', err)
+    }
   }
   return (
     <>

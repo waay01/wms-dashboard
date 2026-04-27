@@ -2,40 +2,55 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: wms_logs
-      POSTGRES_USER: wms
-      POSTGRES_PASSWORD: wms_secret
+      POSTGRES_DB: ${POSTGRES_DB:-wms_logs}
+      POSTGRES_USER: ${POSTGRES_USER:-wms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wms -d wms_logs"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wms} -d ${POSTGRES_DB:-wms_logs}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
 
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://wms:wms_secret@postgres:5432/wms_logs
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wms}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-wms_logs}
       LOGS_PATH: /logs
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     volumes:
       - ./logs:/logs:ro
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/filters/databases\")'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
     ports:
       - "3000:3000"
-    environment:
-      - VITE_API_URL=http://localhost:8000
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

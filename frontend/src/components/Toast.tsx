@@ -1,4 +1,4 @@
-import { useState, useCallback, createContext, useContext } from 'react'
+import { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react'
 import { AlertTriangle, X, CheckCircle, Info } from 'lucide-react'
 import clsx from 'clsx'
 type ToastType = 'error'|'warn'|'info'|'success'
@@ -12,10 +12,19 @@ const ICON_STYLES = { error: 'text-red-400', warn: 'text-orange-400', info: 'tex
 let _id = 0
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
+  const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
   const push = useCallback((t: Omit<Toast,'id'>) => {
     const id = ++_id
     setToasts(p => [...p, {...t, id}])
-    setTimeout(() => setToasts(p => p.filter(x => x.id !== id)), 5000)
+    const timer = setTimeout(() => {
+      setToasts(p => p.filter(x => x.id !== id))
+      timersRef.current.delete(id)
+    }, 5000)
+    timersRef.current.set(id, timer)
+  }, [])
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => { timers.forEach(t => clearTimeout(t)); timers.clear() }
   }, [])
   return (
     <Ctx.Provider value={{ push }}>

@@ -47,31 +47,37 @@ function Dashboard() {
       ])
       setStats(s); setActivity(a); setDatabases(d); setTopErrors(e)
       setLastUpdate(new Date())
+    } catch (err) {
+      console.error('Failed to load dashboard data:', err)
     } finally { setRefreshing(false) }
   }, [filters.dateFrom, filters.dateTo])
 
   const checkWatchdog = useCallback(async () => {
-    const items = await fetchWatchdog()
-    items.forEach((item: {msg:string;count:number}) => {
-      if (!prevWatchdog.current.has(item.msg)) {
-        push({type:'error', title:'🚨 Новый тип ошибки', msg:item.msg})
-        prevWatchdog.current.add(item.msg)
-      }
-    })
-  }, [])
+    try {
+      const items = await fetchWatchdog()
+      items.forEach((item: {msg:string;count:number}) => {
+        if (!prevWatchdog.current.has(item.msg)) {
+          push({type:'error', title:'Новый тип ошибки', msg:item.msg})
+          prevWatchdog.current.add(item.msg)
+        }
+      })
+    } catch (err) {
+      console.error('Watchdog check failed:', err)
+    }
+  }, [push])
 
   useEffect(() => {
-    fetchDateRange().then(setDateRange)
+    fetchDateRange().then(setDateRange).catch(() => {})
     loadAll()
     checkWatchdog()
-  }, [filters.dateFrom, filters.dateTo])
+  }, [loadAll, checkWatchdog])
 
   useEffect(() => {
     if (!autoRefresh) return
     const t1 = setInterval(() => { if (autoRefreshRef.current) loadAll() }, 30000)
     const t2 = setInterval(() => { if (autoRefreshRef.current) checkWatchdog() }, 60000)
     return () => { clearInterval(t1); clearInterval(t2) }
-  }, [autoRefresh])
+  }, [autoRefresh, loadAll, checkWatchdog])
 
   const txtPrimary = dark ? 'text-slate-200' : 'text-slate-800'
   const txtSecondary = dark ? 'text-slate-400' : 'text-slate-600'

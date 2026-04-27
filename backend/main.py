@@ -1,7 +1,8 @@
-import os, io, csv, threading, asyncio
+import os, io, csv, threading, asyncio, logging
 from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -10,9 +11,12 @@ from database import init_db, get_db, LogEntry
 from parser import ingest_all, start_watcher, set_ws_broadcast
 import uvicorn
 
-app = FastAPI(title="WMS Log Dashboard")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+logger = logging.getLogger(__name__)
+
 LOGS_PATH = os.getenv("LOGS_PATH", "./logs")
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+
+VALID_INTERVALS = {"minute", "hour", "day", "week", "month"}
 
 class ConnectionManager:
     def __init__(self): self.active = []
@@ -21,27 +25,55 @@ class ConnectionManager:
         if ws in self.active: self.active.remove(ws)
     async def broadcast(self, data):
         for ws in self.active.copy():
-            try: await ws.send_json(data)
-            except: self.disconnect(ws)
+            try:
+                await ws.send_json(data)
+            except Exception:
+                self.disconnect(ws)
 
 manager = ConnectionManager()
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
     set_ws_broadcast(manager.broadcast)
     def _ingest(): ingest_all(LOGS_PATH); start_watcher(LOGS_PATH)
     threading.Thread(target=_ingest, daemon=True).start()
+    yield
+
+app = FastAPI(title="WMS Log Dashboard", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+
+
+def _build_where(date_from, date_to, extra_conditions="", params=None):
+    """Build parameterized WHERE clause from date filters."""
+    if params is None:
+        params = {}
+    clauses = ["1=1"]
+    if extra_conditions:
+        clauses.append(extra_conditions)
+    df = parse_dt(date_from)
+    dt = parse_dt(date_to, end_of_day=True)
+    if df:
+        params["_df"] = df
+        clauses.append("timestamp >= :_df")
+    if dt:
+        params["_dt"] = dt
+        clauses.append("timestamp <= :_dt")
+    return "WHERE " + " AND ".join(clauses), params
+
 
 def parse_dt(s, end_of_day=False):
     if not s: return None
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try: return datetime.strptime(s, fmt)
-        except: continue
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
     try:
         dt = datetime.strptime(s, "%Y-%m-%d")
         return dt.replace(hour=23, minute=59, second=59) if end_of_day else dt
-    except: return None
+    except ValueError:
+        return None
 
 def apply_time_filter(q, date_from, date_to):
     df = parse_dt(date_from)
@@ -101,20 +133,14 @@ def get_integration_errors(date_from=None, date_to=None, search=None, limit: int
 
 @app.get("/api/integration-errors/summary")
 def integration_summary(date_from=None, date_to=None, db: Session=Depends(get_db)):
-    df = parse_dt(date_from); dt = parse_dt(date_to, end_of_day=True)
-    where = "WHERE database = 'leadwms_transit' AND level_eng = 'ERROR'"
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,100) as m, COUNT(*) as c, MIN(timestamp) as f, MAX(timestamp) as l FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT 20")).fetchall()
+    where, params = _build_where(date_from, date_to, "database = 'leadwms_transit' AND level_eng = 'ERROR'")
+    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,100) as m, COUNT(*) as c, MIN(timestamp) as f, MAX(timestamp) as l FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT 20"), params).fetchall()
     return [{"msg": r[0], "count": r[1], "first_seen": r[2].isoformat() if r[2] else None, "last_seen": r[3].isoformat() if r[3] else None} for r in rows]
 
 @app.get("/api/operators")
 def get_operators(date_from=None, date_to=None, db: Session=Depends(get_db)):
-    df = parse_dt(date_from); dt = parse_dt(date_to, end_of_day=True)
-    where = "WHERE is_tsd = 1 AND operator_name IS NOT NULL AND operator_name != ''"
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(sa_text(f"SELECT operator_name, COUNT(*) as t, SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as e FROM log_entries {where} GROUP BY operator_name ORDER BY t DESC LIMIT 20")).fetchall()
+    where, params = _build_where(date_from, date_to, "is_tsd = 1 AND operator_name IS NOT NULL AND operator_name != ''")
+    rows = db.execute(sa_text(f"SELECT operator_name, COUNT(*) as t, SUM(CASE WHEN level_eng='ERROR' THEN 1 ELSE 0 END) as e FROM log_entries {where} GROUP BY operator_name ORDER BY t DESC LIMIT 20"), params).fetchall()
     return [{"operator": r[0], "operations": r[1], "errors": r[2]} for r in rows]
 
 @app.get("/api/watchdog")
@@ -130,11 +156,10 @@ def get_watchdog(db: Session=Depends(get_db)):
 
 @app.get("/api/charts/activity")
 def chart_activity(interval: str="hour", date_from=None, date_to=None, db: Session=Depends(get_db)):
-    df = parse_dt(date_from); dt = parse_dt(date_to, end_of_day=True)
-    where = ""
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(sa_text(f"SELECT date_trunc('{interval}', timestamp) as t, level_eng, COUNT(*) as c FROM log_entries WHERE 1=1 {where} GROUP BY t, level_eng ORDER BY t")).fetchall()
+    if interval not in VALID_INTERVALS:
+        raise HTTPException(400, f"interval must be one of: {', '.join(sorted(VALID_INTERVALS))}")
+    where, params = _build_where(date_from, date_to)
+    rows = db.execute(sa_text(f"SELECT date_trunc('{interval}', timestamp) as t, level_eng, COUNT(*) as c FROM log_entries {where} GROUP BY t, level_eng ORDER BY t"), params).fetchall()
     result = {}
     for r in rows:
         t = r[0].isoformat() if r[0] else None
@@ -148,12 +173,10 @@ def chart_databases(date_from=None, date_to=None, db: Session=Depends(get_db)):
     return [{"database": r[0], "count": r[1]} for r in q.group_by(LogEntry.database).order_by(func.count(LogEntry.id).desc()).all()]
 
 @app.get("/api/charts/top-errors")
-def chart_top_errors(limit: int=10, date_from=None, date_to=None, db: Session=Depends(get_db)):
-    df = parse_dt(date_from); dt = parse_dt(date_to, end_of_day=True)
-    where = "WHERE level_eng = 'ERROR'"
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
-    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,80) as m, COUNT(*) as c FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT {limit}")).fetchall()
+def chart_top_errors(limit: int=Query(10, le=100), date_from=None, date_to=None, db: Session=Depends(get_db)):
+    where, params = _build_where(date_from, date_to, "level_eng = 'ERROR'")
+    params["_limit"] = limit
+    rows = db.execute(sa_text(f"SELECT SUBSTRING(msg,1,80) as m, COUNT(*) as c FROM log_entries {where} GROUP BY m ORDER BY c DESC LIMIT :_limit"), params).fetchall()
     return [{"msg": r[0], "count": r[1]} for r in rows]
 
 @app.get("/api/charts/levels")
@@ -187,11 +210,20 @@ def rescan(db: Session = Depends(get_db)):
     """Сканирует папку логов и загружает только новые файлы."""
     from parser import rescan_new
     results = []
+    error = None
     def _run():
-        nonlocal results
-        results = rescan_new(LOGS_PATH)
+        nonlocal results, error
+        try:
+            results = rescan_new(LOGS_PATH)
+        except Exception as e:
+            error = str(e)
     t = threading.Thread(target=_run)
-    t.start(); t.join(timeout=2)
+    t.start()
+    t.join(timeout=30)
+    if t.is_alive():
+        return {"status": "running", "msg": "Rescan is still in progress", "new_files": []}
+    if error:
+        raise HTTPException(500, detail=f"Rescan failed: {error}")
     return {"status": "ok", "new_files": results}
 
 @app.get("/api/admin/files")
@@ -215,12 +247,12 @@ def compare_periods(
     db: Session = Depends(get_db)
 ):
     """Сравнение двух периодов по всем метрикам."""
-    def get_metrics(df_str, dt_str):
-        df = parse_dt(df_str)
-        dt = parse_dt(dt_str, end_of_day=True)
-        where = "WHERE 1=1"
-        if df: where += f" AND timestamp >= '{df.isoformat()}'"
-        if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+    def get_metrics(df_str, dt_str, prefix=""):
+        where, params = _build_where(df_str, dt_str)
+        p = {f"{prefix}{k}": v for k, v in params.items()}
+        w = where
+        for k in params:
+            w = w.replace(f":{k}", f":{prefix}{k}")
 
         row = db.execute(sa_text(f"""
             SELECT
@@ -231,20 +263,20 @@ def compare_periods(
                 SUM(CASE WHEN database='leadwms_transit' AND level_eng='ERROR' THEN 1 ELSE 0 END) as integration,
                 COUNT(DISTINCT database) as databases,
                 COUNT(DISTINCT operator_name) FILTER (WHERE operator_name IS NOT NULL) as operators
-            FROM log_entries {where}
-        """)).fetchone()
+            FROM log_entries {w}
+        """), p).fetchone()
 
         top_errors = db.execute(sa_text(f"""
             SELECT SUBSTRING(msg,1,60) as m, COUNT(*) as c
-            FROM log_entries {where} AND level_eng='ERROR'
+            FROM log_entries {w} AND level_eng='ERROR'
             GROUP BY m ORDER BY c DESC LIMIT 5
-        """)).fetchall()
+        """), p).fetchall()
 
         by_level = db.execute(sa_text(f"""
             SELECT level_eng, COUNT(*) as c
-            FROM log_entries {where}
+            FROM log_entries {w}
             GROUP BY level_eng ORDER BY c DESC
-        """)).fetchall()
+        """), p).fetchall()
 
         return {
             "total": row[0] or 0,
@@ -259,8 +291,8 @@ def compare_periods(
         }
 
     return {
-        "period_a": {"from": date_from_a, "to": date_to_a, **get_metrics(date_from_a, date_to_a)},
-        "period_b": {"from": date_from_b, "to": date_to_b, **get_metrics(date_from_b, date_to_b)},
+        "period_a": {"from": date_from_a, "to": date_to_a, **get_metrics(date_from_a, date_to_a, "a_")},
+        "period_b": {"from": date_from_b, "to": date_to_b, **get_metrics(date_from_b, date_to_b, "b_")},
     }
 
 
@@ -271,11 +303,7 @@ def session_operators(
     db: Session = Depends(get_db)
 ):
     """Список операторов у которых есть TSD сессии."""
-    df = parse_dt(date_from)
-    dt = parse_dt(date_to, end_of_day=True)
-    where = "WHERE is_tsd = 1 AND terminal_uuid IS NOT NULL"
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+    where, params = _build_where(date_from, date_to, "is_tsd = 1 AND terminal_uuid IS NOT NULL")
     rows = db.execute(sa_text(f"""
         SELECT 
             COALESCE(operator_name, '—') as operator,
@@ -288,7 +316,7 @@ def session_operators(
         GROUP BY operator_name, terminal_uuid
         ORDER BY last_seen DESC
         LIMIT 100
-    """)).fetchall()
+    """), params).fetchall()
     return [
         {
             "operator": r[0],
@@ -310,11 +338,8 @@ def session_timeline(
     db: Session = Depends(get_db)
 ):
     """Хронология экранов ТСД и ошибок для конкретного терминала."""
-    df = parse_dt(date_from)
-    dt = parse_dt(date_to, end_of_day=True)
-    where = f"WHERE terminal_uuid = '{terminal_uuid}'"
-    if df: where += f" AND timestamp >= '{df.isoformat()}'"
-    if dt: where += f" AND timestamp <= '{dt.isoformat()}'"
+    where, params = _build_where(date_from, date_to, "terminal_uuid = :uuid")
+    params["uuid"] = terminal_uuid
 
     rows = db.execute(sa_text(f"""
         SELECT 
@@ -323,7 +348,7 @@ def session_timeline(
         {where}
         ORDER BY timestamp ASC
         LIMIT 500
-    """)).fetchall()
+    """), params).fetchall()
 
     SEP = chr(11)
     TAB = chr(9)

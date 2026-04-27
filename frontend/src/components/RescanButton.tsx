@@ -14,11 +14,13 @@ export function RescanButton() {
     setLoading(true)
     try {
       const r = await fetch(`${BASE}/api/admin/rescan`, { method: 'POST' })
-      const data = await r.json()
-      setResult(data)
+      if (!r.ok) throw new Error(`Rescan failed: ${r.status}`)
+      setResult(await r.json())
       const f = await fetch(`${BASE}/api/admin/files`)
-      setFiles(await f.json())
+      if (f.ok) setFiles(await f.json())
       setOpen(true)
+    } catch (err) {
+      console.error('Rescan error:', err)
     } finally { setLoading(false) }
   }
 

@@ -8,10 +8,20 @@ export function IntegrationErrors({ dateFrom, dateTo }: Props) {
   const [summary, setSummary] = useState<Summary[]>([])
   const [drill, setDrill] = useState<{msg:string;items:LogItem[];total:number}|null>(null)
   const [loading, setLoading] = useState(false)
-  useEffect(() => { setLoading(true); fetchIntegrationSummary({date_from:dateFrom,date_to:dateTo}).then(setSummary).finally(()=>setLoading(false)) }, [dateFrom,dateTo])
+  useEffect(() => {
+    setLoading(true)
+    fetchIntegrationSummary({date_from:dateFrom,date_to:dateTo})
+      .then(setSummary)
+      .catch(err => console.error('Failed to load integration summary:', err))
+      .finally(()=>setLoading(false))
+  }, [dateFrom,dateTo])
   const openDrill = async (msg: string) => {
-    const data = await fetchIntegrationErrors({search:msg.slice(0,40),date_from:dateFrom,date_to:dateTo,limit:50})
-    setDrill({msg,items:data.items,total:data.total})
+    try {
+      const data = await fetchIntegrationErrors({search:msg.slice(0,40),date_from:dateFrom,date_to:dateTo,limit:50})
+      setDrill({msg,items:data.items,total:data.total})
+    } catch (err) {
+      console.error('Drill-down failed:', err)
+    }
   }
   return (
     <div className="rounded-xl bg-slate-900/60 border border-orange-500/10 p-4">

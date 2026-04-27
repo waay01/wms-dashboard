@@ -1,11 +1,16 @@
+import logging
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://wms:wms_secret@localhost:5432/wms_logs")
-engine = create_engine(DATABASE_URL)
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -41,7 +46,6 @@ class IngestedFile(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
-    # Добавляем столбец если его ещё нет
     try:
         with engine.connect() as conn:
             conn.execute(__import__('sqlalchemy').text(
@@ -51,7 +55,8 @@ def init_db():
                 "CREATE INDEX IF NOT EXISTS ix_terminal_uuid ON log_entries (terminal_uuid)"
             ))
             conn.commit()
-    except: pass
+    except Exception as e:
+        logger.error("Migration failed: %s", e)
 
 def get_db():
     db = SessionLocal()

@@ -1,8 +1,10 @@
-import re, os, time, glob, threading, asyncio
+import re, os, time, glob, threading, asyncio, logging
 from datetime import datetime
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from database import SessionLocal, LogEntry, IngestedFile
+
+logger = logging.getLogger(__name__)
 
 LEVEL_MAP = {"ОШИБКА":"ERROR","СООБЩЕНИЕ":"INFO","ПОДРОБНОСТИ":"DEBUG","КОНТЕКСТ":"DEBUG","ОПЕРАТОР":"DEBUG","ЗАМЕЧАНИЕ":"WARN","ЗАПРОС":"DEBUG","ОТЛАДКА":"DEBUG"}
 LOG_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) MSK \[(\d+)\] (\S+)@(\S+) ([^:]+):\s+(.*)", re.DOTALL)
@@ -28,8 +30,10 @@ _loop = None
 def set_ws_broadcast(cb):
     global _broadcast_cb, _loop
     _broadcast_cb = cb
-    try: _loop = asyncio.get_event_loop()
-    except: pass
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _loop = None
 
 def _fire(entry: LogEntry):
     if _broadcast_cb and _loop and entry.level_eng in ("ERROR","WARN"):
@@ -75,8 +79,10 @@ def parse_line(raw: str):
     operator_name = extract_operator(msg) if is_tsd else None
     terminal_uuid = extract_uuid(msg)
 
-    try: timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
-    except: return None
+    try:
+        timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return None
 
     return LogEntry(
         timestamp=timestamp, pid=int(pid), db_user=db_user,
@@ -124,9 +130,15 @@ def ingest_file(filepath: str, force: bool = False):
         if batch:
             db.bulk_save_objects(batch); db.commit()
             mark_ingested(filepath, len(batch))
-            print(f"[parser] Saved {len(batch)} from {os.path.basename(filepath)}")
+            logger.info("Saved %d from %s", len(batch), os.path.basename(filepath))
+        else:
+            mark_ingested(filepath, 0)
+            logger.info("No parseable entries in %s, marked as ingested", os.path.basename(filepath))
         return len(batch)
-    except Exception as e: print(f"[parser] Error: {e}"); db.rollback(); return 0
+    except Exception as e:
+        logger.error("Error ingesting %s: %s", filepath, e)
+        db.rollback()
+        return 0
     finally: db.close()
 
 def ingest_all(logs_path: str):
@@ -161,9 +173,13 @@ class TailHandler:
 
     def _save(self, entry):
         db = SessionLocal()
-        try: db.add(entry); db.commit(); db.refresh(entry); _fire(entry)
-        except: db.rollback()
-        finally: db.close()
+        try:
+            db.add(entry); db.commit(); db.refresh(entry); _fire(entry)
+        except Exception as e:
+            logger.error("Failed to save live entry: %s", e)
+            db.rollback()
+        finally:
+            db.close()
 
 _tail_handlers: dict = {}
 

@@ -29,12 +29,20 @@ export function LiveFeed() {
   }, [paused])
 
   useEffect(() => {
-    const wsUrl = BASE.replace('http', 'ws') + '/ws/live'
+    const wsUrl = BASE.replace(/^http(s?):/, 'ws$1:') + '/ws/live'
+    let disposed = false
+    let reconnectTimer: ReturnType<typeof setTimeout>
+
     const connect = () => {
+      if (disposed) return
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
-      ws.onopen = () => setConnected(true)
-      ws.onclose = () => { setConnected(false); setTimeout(connect, 3000) }
+      ws.onopen = () => { if (!disposed) setConnected(true) }
+      ws.onclose = () => {
+        if (disposed) return
+        setConnected(false)
+        reconnectTimer = setTimeout(connect, 3000)
+      }
       ws.onerror = () => ws.close()
       ws.onmessage = (e) => {
         if (pausedRef.current) return
@@ -43,11 +51,15 @@ export function LiveFeed() {
           if (data.type === 'live') {
             setEntries(prev => [data, ...prev].slice(0, 200))
           }
-        } catch {}
+        } catch { /* malformed JSON from server */ }
       }
     }
     connect()
-    return () => wsRef.current?.close()
+    return () => {
+      disposed = true
+      clearTimeout(reconnectTimer)
+      wsRef.current?.close()
+    }
   }, [])
 
   return (

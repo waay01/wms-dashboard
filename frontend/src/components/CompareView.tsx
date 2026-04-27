@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { BASE } from '../api/client'
 
@@ -55,7 +55,10 @@ export function CompareView() {
     setLoading(true)
     try {
       const r = await fetch(`${BASE}/api/compare?date_from_a=${fa}&date_to_a=${ta}&date_from_b=${fb}&date_to_b=${tb}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setResult(await r.json())
+    } catch (err) {
+      console.error('Compare failed:', err)
     } finally { setLoading(false) }
   }
 
@@ -65,11 +68,20 @@ export function CompareView() {
     'Период Б': result.period_b[m.key as keyof Metrics] as number,
   })) : []
 
-  const topData = result ? result.period_a.top_errors.map((e, i) => ({
-    msg: e.msg.slice(0,30) + '…',
-    'Период А': e.count,
-    'Период Б': result.period_b.top_errors[i]?.count || 0,
-  })) : []
+  const topData = (() => {
+    if (!result) return []
+    const bMap = new Map(result.period_b.top_errors.map(e => [e.msg, e.count]))
+    const allMsgs = new Set([
+      ...result.period_a.top_errors.map(e => e.msg),
+      ...result.period_b.top_errors.map(e => e.msg),
+    ])
+    const aMap = new Map(result.period_a.top_errors.map(e => [e.msg, e.count]))
+    return [...allMsgs].map(msg => ({
+      msg: msg.slice(0, 30) + (msg.length > 30 ? '…' : ''),
+      'Период А': aMap.get(msg) || 0,
+      'Период Б': bMap.get(msg) || 0,
+    })).sort((a, b) => (b['Период А'] + b['Период Б']) - (a['Период А'] + a['Период Б'])).slice(0, 10)
+  })()
 
   return (
     <div className="flex flex-col gap-4">

@@ -41,8 +41,10 @@ export function SessionsView({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
     setLoading(true)
     try {
       const r = await fetch(`${BASE}/api/sessions/operators${qs({ date_from: dateFrom, date_to: dateTo })}`)
-      const data = await r.json()
-      setSessions(data)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setSessions(await r.json())
+    } catch (err) {
+      console.error('Failed to load sessions:', err)
     } finally { setLoading(false) }
   }
 
@@ -55,7 +57,10 @@ export function SessionsView({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
         date_from: dateFrom,
         date_to: dateTo
       })}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setTimeline(await r.json())
+    } catch (err) {
+      console.error('Failed to load timeline:', err)
     } finally { setLoadingTimeline(false) }
   }
 
@@ -105,9 +110,9 @@ export function SessionsView({ dateFrom, dateTo }: { dateFrom: string; dateTo: s
               <Monitor size={13}/> Сессии ({filtered.length})
             </h3>
             <div className="overflow-auto max-h-[500px] flex flex-col gap-1">
-              {filtered.map((s, i) => (
+              {filtered.map((s) => (
                 <div
-                  key={i}
+                  key={s.terminal_uuid}
                   onClick={() => loadTimeline(s)}
                   className={clsx(
                     'p-3 rounded-lg cursor-pointer transition-colors border',

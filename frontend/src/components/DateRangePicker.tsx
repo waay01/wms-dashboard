@@ -71,6 +71,7 @@ export function DateRangePicker({ dateFrom, dateTo, onChange, minDate, maxDate }
             <label className="text-xs text-slate-500 uppercase tracking-widest">От</label>
             <div className="flex gap-2">
               <input type="date" value={fromDate}
+                min={minDate?.split('T')[0]} max={maxDate?.split('T')[0]}
                 onChange={e => onChange(build(e.target.value, fromTime), buildTo(toDate, toTime))}
                 className="flex-1 bg-slate-800 border border-white/5 rounded-lg px-2 py-1.5 text-xs mono text-slate-200 focus:outline-none focus:border-blue-500/50" />
               <input type="time" value={fromTime || '00:00'}
@@ -81,6 +82,7 @@ export function DateRangePicker({ dateFrom, dateTo, onChange, minDate, maxDate }
             <label className="text-xs text-slate-500 uppercase tracking-widest">До</label>
             <div className="flex gap-2">
               <input type="date" value={toDate}
+                min={minDate?.split('T')[0]} max={maxDate?.split('T')[0]}
                 onChange={e => onChange(build(fromDate, fromTime), buildTo(e.target.value, toTime))}
                 className="flex-1 bg-slate-800 border border-white/5 rounded-lg px-2 py-1.5 text-xs mono text-slate-200 focus:outline-none focus:border-blue-500/50" />
               <input type="time" value={toTime || '23:59'}

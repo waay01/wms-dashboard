@@ -10,7 +10,9 @@ export function OperatorsChart({ dateFrom, dateTo }: Props) {
   const [data, setData] = useState<Op[]>([])
 
   useEffect(() => {
-    fetchOperators({ date_from: dateFrom, date_to: dateTo }).then(setData)
+    fetchOperators({ date_from: dateFrom, date_to: dateTo })
+      .then(setData)
+      .catch(err => console.error('Failed to load operators:', err))
   }, [dateFrom, dateTo])
 
   // Вычисляем нужную ширину для самого длинного имени
